@@ -1,0 +1,201 @@
+# 医学/健康知识库一期 QA 整理与标签评分配置 v0.1
+# 核心流程：人工精选文章 → 自动整理 QA → 生成文章标签 → 打 QA 分数 → 分级入库
+# 本文件只描述一期范围：QA、标签、QA 分数、分级、入库权重。
+
+version: "v0.1"
+profile: medical_phase1
+threshold: 85
+
+phase_order:
+  - "article_input"
+  - "qa_generation"
+  - "tag_generation"
+  - "qa_scoring"
+  - "grading"
+  - "library_weighting"
+
+output_fields:
+  required:
+    - article_id
+    - title
+    - article_type
+    - domain
+    - display_tags
+    - structured_tags
+    - qa_pairs
+    - qa_score
+    - grade
+    - library_action
+    - qa_weight
+    - summary
+    - score_detail
+    - deduction_reasons
+    - version
+
+qa_generation:
+  min_pairs: 1
+  max_pairs: 5
+  requirements:
+    - "问题必须来自文章正文，不凭空扩展"
+    - "回答必须忠于原文，不夸大疗效"
+    - "回答要适合患者和家属理解"
+    - "医学建议必须保留安全边界，不能替代医生判断"
+  qa_pair_schema:
+    question: "患者/家属真实可能问的问题"
+    answer: "基于正文整理的简洁回答"
+    confidence: "0-1，小数，表示该 QA 可用性置信度"
+    usage_note: "使用边界，例如患者教育/需医生判断/仅供参考"
+
+tag_generation:
+  display_tags_count:
+    min: 8
+    max: 10
+  structured_tags_required: true
+  language:
+    default: "zh-CN"
+  style:
+    - "短词优先"
+    - "患者容易理解"
+    - "适合搜索"
+    - "适合知识库分类"
+    - "适合 QA 召回"
+    - "避免标题党"
+    - "避免夸大疗效"
+    - "避免制造焦虑"
+  tag_types:
+    disease:
+      description: "疾病标签"
+      examples: ["胰腺癌", "胆道癌", "胃癌", "肠癌"]
+    domain:
+      description: "领域标签"
+      examples: ["医学治疗", "营养支持", "心理支持", "护理康复", "患者教育"]
+    topic:
+      description: "主题标签"
+      examples: ["化疗副作用", "靶向治疗", "免疫治疗", "疼痛管理", "营养不良", "焦虑抑郁"]
+    scenario:
+      description: "使用场景标签"
+      examples: ["术后恢复", "治疗期间", "复查随访", "居家护理", "问诊准备", "入院前准备"]
+    audience:
+      description: "目标人群标签"
+      examples: ["患者", "家属", "年轻患者", "照护者", "志愿者"]
+    content_type:
+      description: "内容类型标签"
+      examples: ["医学科普", "指南解读", "药物介绍", "医生访谈", "患者经验", "社区公告", "QA知识"]
+    qa_intent:
+      description: "问答意图标签"
+      examples: ["是什么", "怎么做", "什么时候就医", "如何判断", "如何准备", "需要注意什么"]
+    risk_level:
+      description: "风险等级标签"
+      examples: ["低风险科普", "需医生判断", "高风险误导"]
+  display_tag_rules:
+    - "每篇文章生成 8–10 个 display_tags"
+    - "每个标签 2–8 个汉字为佳"
+    - "优先使用患者真实会搜索的词"
+    - "优先覆盖疾病、主题、场景、对象和问题"
+    - "不要生成过度营销标签"
+    - "不要生成神药、治愈、救命疗法、逆转癌症等夸大词"
+    - "医学治疗类标签保持中性"
+    - "心理、营养、护理类内容避免制造焦虑"
+
+article_type_examples:
+  medical_education:
+    display_tags: ["胰腺癌", "化疗方案", "副作用管理", "白细胞下降", "血小板低", "治疗期间", "患者教育", "家属必看", "问诊准备", "医生沟通"]
+  treatment_progress:
+    display_tags: ["胰腺癌新药", "KRAS靶向", "临床研究", "靶向治疗", "治疗进展", "药物数据", "患者科普", "医生评估", "研究解读", "后线治疗"]
+  nutrition_support:
+    display_tags: ["胰腺癌营养", "体重下降", "食欲差", "蛋白补充", "营养不良", "治疗期间饮食", "家属照护", "营养支持", "少量多餐", "营养师建议"]
+  psychological_support:
+    display_tags: ["癌症心理", "患者焦虑", "家属压力", "情绪支持", "睡眠问题", "心理调适", "抗癌陪伴", "照护者支持", "专业帮助", "心理科普"]
+  nursing_rehab:
+    display_tags: ["术后护理", "居家照护", "伤口观察", "发热处理", "疼痛管理", "康复训练", "复查随访", "家属护理", "异常信号", "及时就医"]
+  patient_experience:
+    display_tags: ["患者经验", "治疗记录", "问诊准备", "家属陪诊", "就医流程", "病友分享", "经验参考", "医生沟通", "治疗选择", "个体差异"]
+
+# QA 分数框架：四项总分 100。
+# 一期标签质量不单独打复杂分，纳入 qa_usability。
+score_detail_schema:
+  source_quality:
+    max: 25
+    description: "信源质量。指南/共识/权威机构高分，医生科普也可高分；影像号、营销号低分。"
+  content_clarity:
+    max: 25
+    description: "内容清晰度。结构完整、表述清楚、患者能理解、信息不混乱。"
+  qa_usability:
+    max: 35
+    description: "QA 可用性。是否能整理为准确 QA，标签是否清楚、准确、适合搜索和召回。"
+  safety_boundary:
+    max: 15
+    description: "安全边界。是否不鼓吹神药、不制造焦虑、不替代医生判断、不导向非规范治疗。"
+
+source_quality_rules:
+  high_score:
+    - "临床指南、专家共识、权威机构发布"
+    - "医生/专业团队基于规范诊疗进行患者教育"
+  medium_score:
+    - "正规医疗机构科普"
+    - "患者经验但有明确边界，未夸大疗效"
+  low_score:
+    - "影像号、营销号、带货导向内容"
+    - "鼓吹海外就医、神药、非规范治疗、中医替代规范治疗"
+    - "缺乏证据，用单一案例鼓吹疗效"
+
+tag_deduction_rules:
+  too_generic_tags:
+    condition: "标签过泛，例如健康、科普、癌症、治疗等占比过高"
+    penalty: 3
+  misleading_tags:
+    condition: "标签与正文主题不匹配"
+    penalty: 5
+  marketing_tags:
+    condition: "标签包含神药、治愈、逆转、奇迹、救命等营销词"
+    penalty: 8
+  insufficient_tags:
+    condition: "标签少于 8 个"
+    penalty: 3
+
+marketing_tag_blacklist:
+  - "神药"
+  - "治愈"
+  - "逆转"
+  - "奇迹"
+  - "救命"
+  - "救命疗法"
+
+risk_redlines:
+  - id: overseas_treatment
+    name: "鼓吹海外就医"
+    keywords: ["赴美就医", "赴日就医", "海外医疗", "出国看病"]
+    action: "downgrade"
+    max_grade: "C"
+  - id: miracle_drug
+    name: "神药/夸大疗效"
+    keywords: ["神药", "抗癌神药", "彻底治愈", "逆转癌症", "奇迹", "救命疗法"]
+    action: "downgrade"
+    max_grade: "D"
+  - id: non_standard_treatment
+    name: "非规范治疗"
+    keywords: ["祖传秘方", "偏方治癌", "中医根治", "气功治癌", "中医替代化疗"]
+    action: "reject"
+  - id: single_case_hype
+    name: "缺乏证据的单一案例鼓吹"
+    patterns: ["仅凭.*治愈", "一个案例.*奇迹", "亲身经历.*根治"]
+    action: "downgrade"
+    max_grade: "C"
+
+grading:
+  - grade: A
+    min_score: 90
+    library_action: "高权重入库"
+    qa_weight: 1.0
+  - grade: B
+    min_score: 80
+    library_action: "标准入库"
+    qa_weight: 0.8
+  - grade: C
+    min_score: 70
+    library_action: "低权重入库/人工复核"
+    qa_weight: 0.5
+  - grade: D
+    min_score: 0
+    library_action: "不建议入库"
+    qa_weight: 0.0

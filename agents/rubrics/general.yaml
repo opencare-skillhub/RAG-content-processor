@@ -1,0 +1,53 @@
+# 通用兜底评分标准 v0.1
+# 适用于非医学领域的知识库。医学/健康场景请用 medical.yaml。
+
+version: "v0.1"
+profile: general
+threshold: 80
+default_library_action_below_threshold: "询问"
+
+dimensions:
+  source_quality:
+    weight: 25
+    max: 25
+    rubric: "来源权威性与可信度"
+  content_clarity:
+    weight: 35
+    max: 35
+    rubric: "结构完整、表述清晰、信息密度"
+  qa_usability:
+    weight: 25
+    max: 25
+    rubric: "是否适合生成 QA、标签是否准确"
+  safety_boundary:
+    weight: 15
+    max: 15
+    rubric: "是否规范、是否客观"
+
+source_levels:
+  - { level: S, score_range: [23, 25], desc: "权威机构、官方文档", signals: ["官方", "白皮书"] }
+  - { level: A, score_range: [20, 22], desc: "专业团队、专家署名", signals: ["专家", "团队"] }
+  - { level: B, score_range: [15, 19], desc: "正规媒体、机构科普", signals: [] }
+  - { level: C, score_range: [8, 14],  desc: "普通内容号", signals: [] }
+  - { level: D, score_range: [0, 7],   desc: "低质/营销渠道", signals: [] }
+
+redlines: []
+
+tag_generation:
+  display_tags_count: { min: 6, max: 10 }
+  language: "zh-CN"
+  style: ["短词优先", "适合搜索", "避免标题党"]
+  structured_schema:
+    topic: { desc: "主题标签", examples: [] }
+    content_type: { desc: "内容类型标签", examples: [] }
+  deduction_rules:
+    too_generic_tags: { condition: "标签过泛", penalty: 3 }
+    insufficient_tags: { condition: "标签数量不足", penalty: 3 }
+
+marketing_tag_blacklist: ["神药", "治愈", "逆转", "奇迹", "救命疗法"]
+
+grades:
+  - { grade: A, min: 90, action: "直接入库" }
+  - { grade: B, min: 80, action: "标准入库" }
+  - { grade: C, min: 70, action: "询问" }
+  - { grade: D, min: 0,  action: "不入库" }

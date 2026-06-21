@@ -1,0 +1,23 @@
+# Environment files
+.env
+.config.yaml
+.bak
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local outputs and inputs
+output/
+input/
+data/
+wechat-downloads/
+urls.txt
+test_article.md
+
+# Logs and macOS metadata
+*.log
+.DS_Store
+
+# State files
+state/
