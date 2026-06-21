@@ -21,3 +21,9 @@ test_article.md
 
 # State files
 state/
+
+# 运行时输出（skill 包不应包含测试产物）
+articles/
+qa-output/
+qa-reports/
+wechat-downloads*/
