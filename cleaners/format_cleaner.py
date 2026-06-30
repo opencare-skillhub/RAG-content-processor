@@ -17,14 +17,23 @@ class FormatCleaner:
     """第一阶段：格式清理器"""
 
     # CSS 残留模式
+    # 注意：花括号块 `{...}` 不在此列，改由 _remove_css_braces 保守处理，
+    # 避免误删正文中的 JSON / LaTeX / 含中文的花括号内容。
     CSS_PATTERNS = [
-        (r'\{[^}]*\}', 'CSS 块'),  # {property: value}
         (r'<!--\s*[\w\s:;#-]+-->', 'CSS 注释'),  # <!-- CSS comments -->
         (r'<style[^>]*>.*?</style>', 'style 标签'),  # <style> blocks
         (r'class="[^"]*"', 'class 属性'),  # class attributes
         (r'style="[^"]*"', 'style 属性'),  # style attributes
         (r'data-[\w-]+="[^"]*"', 'data 属性'),  # data-* attributes
     ]
+
+    # 围栏代码块标记（``` 或 ~~~ 开头）
+    CODE_FENCE_RE = re.compile(r'^\s*(```|~~~)')
+
+    # 单条 CSS 声明：标识符 + 冒号 + 值（如 color: red、margin-top: 0）
+    _CSS_DECL_RE = re.compile(r'^[a-zA-Z-]+\s*:\s*[^;{}]+$')
+    # CJK 字符
+    _CJK_RE = re.compile(r'[\u4e00-\u9fff]')
 
     # 格式噪音模式（整行跳过）
     NOISE_PATTERNS = [
@@ -111,9 +120,19 @@ class FormatCleaner:
         # 按行处理
         lines = content.split('\n')
         cleaned_lines = []
+        in_code_fence = False
 
         for line in lines:
             self.stats['lines_processed'] += 1
+
+            # 围栏代码块：进入/退出时保留标记行，块内整体跳过所有清洗
+            if self.CODE_FENCE_RE.match(line):
+                in_code_fence = not in_code_fence
+                cleaned_lines.append(line)
+                continue
+            if in_code_fence:
+                cleaned_lines.append(line)
+                continue
 
             # 跳过空行
             if not line.strip():
@@ -157,7 +176,44 @@ class FormatCleaner:
             if matches:
                 self.stats['css_removed'] += len(matches)
                 line = re.sub(pattern, '', line)
+        # 保守清理花括号块（仅疑似 CSS，保留 JSON/LaTeX/含中文内容）
+        line = self._remove_css_braces(line)
         return line.strip()
+
+    def _remove_css_braces(self, line: str) -> str:
+        """保守删除花括号块。
+
+        仅当 `{...}` 内容“看起来像 CSS 声明”时才删除，避免误删正文中的
+        JSON、LaTeX（如 \\frac{a}{b}）或含中文的花括号内容。
+        """
+        def _repl(match: 're.Match') -> str:
+            inner = match.group(1)
+            if self._looks_like_css(inner):
+                self.stats['css_removed'] += 1
+                return ''
+            return match.group(0)
+
+        # 仅匹配不含嵌套花括号的最内层块
+        return re.sub(r'\{([^{}]*)\}', _repl, line)
+
+    def _looks_like_css(self, inner: str) -> bool:
+        """判断花括号内容是否疑似 CSS 声明块。
+
+        规则（需同时满足）：
+        - 不含中文（CSS 属性/值不含中文，正文花括号常含中文）
+        - 含冒号
+        - 按 `;` 拆分后，每个非空片段都形如 `ident: value`（CSS 声明）
+        """
+        if not inner.strip():
+            return False
+        if self._CJK_RE.search(inner):
+            return False
+        if ':' not in inner:
+            return False
+        parts = [p.strip() for p in inner.split(';') if p.strip()]
+        if not parts:
+            return False
+        return all(self._CSS_DECL_RE.match(p) for p in parts)
 
     def _is_noise(self, line: str) -> bool:
         """检测格式噪音"""

@@ -89,7 +89,29 @@ uv run python3 main.py download-and-clean \
   --no-enrich
 ```
 
-### 3. QA 评分 + 入库（质量门控）
+### 3. 处理本地文件（process-local，来源无关）
+
+清洗本地已有文件，覆盖 `.md/.txt/.html`：按类型自动路由清洗（Markdown 格式清理 / HTML 正文提取 / 纯文本去噪），默认 LLM 富化 frontmatter，可选去重上传。
+
+```bash
+cd ~/.agents/skills/fastgpt-content-processor
+
+# 清洗 + 富化，输出到 ./cleaned
+uv run python3 main.py process-local --input ./some-dir --output ./cleaned
+
+# 只清洗不富化
+uv run python3 main.py process-local --input ./some-dir --no-enrich
+
+# 清洗 + 富化 + 上传知识库（需配置 FASTGPT_*）
+uv run python3 main.py process-local --input ./some-dir --dataset-id your-dataset-id
+
+# dry-run：只列出文件与类型路由
+uv run python3 main.py process-local --input ./some-dir --dry-run
+```
+
+> `clean-wechat` 现也支持 `--extensions`（默认 `.md`）与默认 LLM 富化（`--no-enrich` 关闭）。
+
+### 4. QA 评分 + 入库（质量门控）
 
 ```bash
 cd ~/.agents/skills/fastgpt-content-processor
@@ -111,7 +133,7 @@ uv run python3 main.py qa-ingest \
 - 默认阈值 85，低于阈值或 D 级自动跳过不上传
 - 评分模型固定 `qwen3.7-max`
 
-### 4. Dry-run（预览，不花钱）
+### 5. Dry-run（预览，不花钱）
 
 ```bash
 cd ~/.agents/skills/fastgpt-content-processor
@@ -177,6 +199,6 @@ uv run python3 -m pytest -q
 ├── agents/                    # LLM 富化器、QA 评分器
 ├── cleaners/                  # 格式清洗、frontmatter 标准化
 ├── fetchers/                  # 微信文章下载器（MCP）
-├── tests/                     # 86 个单元测试
+├── tests/                     # 104 个单元测试
 └── docs/dev.log               # 开发记录
 ```

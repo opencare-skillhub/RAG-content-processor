@@ -87,7 +87,35 @@ python3 main.py download-and-clean \
 
 ---
 
-## 场景二：QA 评分 + 入库（质量门控）
+## 场景二：处理本地已有文件（process-local，覆盖 .md/.txt/.html）
+
+**目标**：清洗本地已有的文件（不限来源），自动按类型路由——Markdown 走格式清理、HTML 提取正文、TXT 去噪，默认 LLM 富化 frontmatter，可选直接上传知识库。
+
+```bash
+# 清洗 + 富化，输出到 ./cleaned
+python3 main.py process-local --input ./some-dir --output ./cleaned
+
+# 只清洗不富化
+python3 main.py process-local --input ./some-dir --no-enrich
+
+# 清洗 + 富化 + 上传知识库
+python3 main.py process-local --input ./some-dir --dataset-id your-dataset-id
+
+# dry-run：只列出文件与类型路由，不清洗/富化/上传
+python3 main.py process-local --input ./some-dir --dry-run
+```
+
+**发生了什么**：
+1. 收集 `.md/.txt/.html`（用 `--extensions` 可调）
+2. 按类型清洗：`markdown→FormatCleaner`、`html→正文提取`、`text→去噪`
+3. 默认 LLM 富化 `summary/description/tags`（`--no-enrich` 关闭）
+4. 统一写出为带 frontmatter 的 `.md`；给定 `--dataset-id` 则去重上传
+
+> 与「场景一」的区别：`download-and-clean` 从微信 URL 开始；`process-local` 处理**本地已有文件**，来源无关。
+
+---
+
+## 场景三：QA 评分 + 入库（质量门控）
 
 **目标**：对清洗后的文章做专业 QA 评分（内容质量、标签准确度、安全边界），只有高分文章才上传到 FastGPT 知识库。
 

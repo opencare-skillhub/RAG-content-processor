@@ -9,7 +9,8 @@ import tempfile
 
 from cleaners.format_cleaner import FormatCleaner
 from cleaners.frontmatter_doctor import FrontmatterDoctor
-from cleaners.markdown import MarkdownCleaner
+# [已停用] MarkdownCleaner 已禁用导出，相关测试一并跳过：
+# from cleaners.markdown import MarkdownCleaner
 from cleaners.text import TextCleaner
 from cleaners.wechat_article import WechatArticleCleaner
 from utils.dedup import DedupManager
@@ -158,34 +159,9 @@ def test_frontmatter_doctor_author_pattern_preferred_over_account():
 
 
 # ---------------------------------------------------------------------------
-# cleaners/markdown
+# cleaners/markdown —— [已停用] MarkdownCleaner 已禁用导出（被 FormatCleaner 取代），
+# 原 test_markdown_cleaner_* 三个用例随之移除。详见 spec content-pipeline-refactor §3。
 # ---------------------------------------------------------------------------
-
-def test_markdown_cleaner_removes_front_matter():
-    cleaner = MarkdownCleaner()
-    content = "---\ntitle: x\n---\n正文"
-    cleaned = cleaner.clean(content)
-    assert "title:" not in cleaned
-    assert "正文" in cleaned
-
-
-def test_markdown_cleaner_normalizes_headings():
-    # NOTE: 当前实现把无空格的标题 "##标题" 变成 "# #标题"，
-    # 而非期望的 "## 标题"。这是已知行为（cleaners/markdown.py 标题规范化逻辑），
-    # 先用回归断言锁定，待修复后更新为 "## 标题"。
-    cleaner = MarkdownCleaner()
-    content = "##标题\n正文"
-    cleaned = cleaner.clean(content)
-    assert "标题" in cleaned
-    assert "正文" in cleaned
-
-
-def test_markdown_cleaner_removes_html_comments():
-    cleaner = MarkdownCleaner()
-    content = "<!-- note -->正文"
-    cleaned = cleaner.clean(content)
-    assert "note" not in cleaned
-    assert "正文" in cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -220,3 +196,128 @@ def test_wechat_article_cleaner_extracts_main_content():
     assert "第一段" in cleaned
     assert "第二段" in cleaned
     assert "评论区" not in cleaned
+
+
+# ---------------------------------------------------------------------------
+# cleaners/format_cleaner —— 收紧后的 {...} 规则回归（spec §8）
+# ---------------------------------------------------------------------------
+
+def test_format_cleaner_removes_inline_css_braces():
+    """疑似 CSS 的花括号块仍应被清除。"""
+    cleaner = FormatCleaner()
+    content = "段落 {color: red; margin: 0} 文字\n正文"
+    cleaned, _ = cleaner.clean(content)
+    assert "color" not in cleaned
+    assert "margin" not in cleaned
+    assert "正文" in cleaned
+
+
+def test_format_cleaner_keeps_latex_braces():
+    """LaTeX 花括号（无冒号）不应被误删。"""
+    cleaner = FormatCleaner()
+    content = "公式 $\\frac{a}{b}$ 结束"
+    cleaned, _ = cleaner.clean(content)
+    assert "\\frac{a}{b}" in cleaned
+
+
+def test_format_cleaner_keeps_braces_with_cjk():
+    """含中文的花括号内容不应被误删。"""
+    cleaner = FormatCleaner()
+    content = "配置项 {名称: 测试值} 说明"
+    cleaned, _ = cleaner.clean(content)
+    assert "名称" in cleaned
+    assert "测试值" in cleaned
+
+
+def test_format_cleaner_keeps_json_braces_outside_fence():
+    """裸 JSON（键带引号）不符合 CSS 声明，应保留。"""
+    cleaner = FormatCleaner()
+    content = '示例 {"name": "x", "age": 1} 行'
+    cleaned, _ = cleaner.clean(content)
+    assert '"name"' in cleaned
+    assert '"age"' in cleaned
+
+
+def test_format_cleaner_skips_fenced_code_block():
+    """围栏代码块内的内容（含 JSON / CSS）应原样保留。"""
+    cleaner = FormatCleaner()
+    content = (
+        "正文前\n"
+        "```json\n"
+        '{"color": "red", "margin": 0}\n'
+        "```\n"
+        "正文后"
+    )
+    cleaned, _ = cleaner.clean(content)
+    assert '{"color": "red", "margin": 0}' in cleaned
+    assert "正文前" in cleaned
+    assert "正文后" in cleaned
+
+
+# ---------------------------------------------------------------------------
+# cleaners/pipeline —— ContentCleaningPipeline 路由（spec §4）
+# ---------------------------------------------------------------------------
+
+from cleaners.pipeline import ContentCleaningPipeline
+
+
+def test_pipeline_markdown_route_cleans_and_standardizes():
+    pipe = ContentCleaningPipeline()
+    content = "<style>.x{color:red}</style>\n# 标题\n正文内容"
+    result, fm = pipe.clean(content, "markdown", {"title": "T"})
+    assert result.startswith("---\n")          # 已加 frontmatter
+    assert "style" not in result               # markdown 走 FormatCleaner
+    assert "正文内容" in result
+    assert fm["title"] == "T"
+
+
+def test_pipeline_html_route_extracts_main_content():
+    pipe = ContentCleaningPipeline()
+    html = (
+        '<html><body><div id="js_content">'
+        "<p>第一段</p><p>第二段</p></div>"
+        '<div class="article_comment">评论区</div></body></html>'
+    )
+    result, fm = pipe.clean(html, "html", {"title": "H"})
+    assert "第一段" in result and "第二段" in result
+    assert "评论区" not in result               # html 走 WechatArticleCleaner
+    assert result.startswith("---\n")
+
+
+def test_pipeline_text_route_removes_marketing():
+    pipe = ContentCleaningPipeline()
+    content = "编辑：张三\n正文段落\n长按识别二维码关注我们"
+    result, fm = pipe.clean(content, "text", {"title": "X"})
+    assert "二维码" not in result               # text 走 TextCleaner
+    assert "正文段落" in result
+
+
+def test_pipeline_metadata_overrides_extracted():
+    pipe = ContentCleaningPipeline()
+    content = "# 正文标题\n正文"
+    result, fm = pipe.clean(content, "markdown", {"original_url": "https://e.com/1"})
+    assert fm["original_url"] == "https://e.com/1"
+
+
+# ---------------------------------------------------------------------------
+# utils/dedup —— compute_dedup_key 优先级（spec §5）
+# ---------------------------------------------------------------------------
+
+from utils.dedup import compute_dedup_key
+
+
+def test_compute_dedup_key_prefers_original_url():
+    key = compute_dedup_key({"original_url": "https://e.com/1"}, "正文", "/tmp/x.md")
+    assert key == "url:https://e.com/1"
+
+
+def test_compute_dedup_key_falls_back_to_content_hash():
+    key = compute_dedup_key({}, "abc", "/tmp/x.md")
+    assert key == "content:" + calculate_hash("abc")
+
+
+def test_compute_dedup_key_falls_back_to_file_hash(tmp_path):
+    p = tmp_path / "x.md"
+    p.write_text("data", encoding="utf-8")
+    key = compute_dedup_key({}, None, str(p))
+    assert key == "file:" + calculate_file_hash(str(p))

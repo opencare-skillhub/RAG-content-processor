@@ -8,14 +8,18 @@
 - 文本推送（upload_text）
 """
 import json
+import logging
 import os
 import re
 import requests
 from pathlib import Path
 from typing import Optional, List, Dict
+from urllib.parse import quote
 
-from utils.dedup import DedupManager
-from utils.hash import calculate_file_hash
+from utils.dedup import DedupManager, compute_dedup_key
+from utils.hash import calculate_file_hash, calculate_hash
+
+logger = logging.getLogger(__name__)
 
 
 class FastGPTSyncer:
@@ -101,14 +105,20 @@ class FastGPTSyncer:
     
     def upload_file(self, file_path: str, 
                    collection_name: Optional[str] = None,
-                   metadata: Optional[dict] = None) -> str:
+                   metadata: Optional[dict] = None,
+                   parent_id: Optional[str] = None) -> str:
         """上传文件到 FastGPT（支持去重）
-        
+
+        采用官方 create/localFile 接口：该接口会**自动创建集合并触发训练/embedding**，
+        因此 parentId 默认传 None（与官方 curl 一致），不再预建一个空集合当父级
+        （预建 file 类型集合当 parentId 会导致训练不触发）。集合名由上传的文件名决定。
+
         Args:
             file_path: 文件路径
-            collection_name: 集合名称（可选）
+            collection_name: 集合名称（可选；默认用文件名，仅用于覆盖集合显示名）
             metadata: 可选的 QA 元数据
-            
+            parent_id: 可选的父级**文件夹**集合 ID（用于目录归类，默认 None=根）
+
         Returns:
             "success" - 上传成功
             "skipped" - 文件已上传且内容未变化（跳过）
@@ -119,50 +129,68 @@ class FastGPTSyncer:
             if not path.exists():
                 print(f"❌ 文件不存在: {file_path}")
                 return "failed"
-            
-            # ===== 去重检查（参考 clinicaltrails推送和订阅 的 sync_once 逻辑）=====
-            file_hash = calculate_file_hash(str(path))
-            file_identity = str(path.resolve())  # 使用绝对路径作为唯一标识
-            
-            if self.dedup.is_duplicate(file_identity, file_hash):
-                print(f"⏭️  跳过（内容未变化）: {path.name}")
-                return "skipped"
-            
-            # 创建或获取集合
-            collection_id = self._get_or_create_collection(
-                collection_name or path.stem
-            )
-            
-            if not collection_id:
-                print("❌ 无法创建集合")
-                return "failed"
-            
-            # 使用官方 create/localFile 接口
-            url = f"{self.base_url}/core/dataset/collection/create/localFile"
+
             metadata = metadata or {}
-            
+
+            # ===== 去重检查（key: original_url → 内容 hash → 文件 hash）=====
+            # 读取内容用于内容 hash 与去重 key 计算
+            try:
+                content_text = path.read_text(encoding='utf-8')
+            except (UnicodeDecodeError, OSError):
+                content_text = None
+
+            dedup_key = compute_dedup_key(metadata, content_text, path)
+            # value_hash 表示"内容是否变化"，统一用内容 hash（无法读文本时回退文件字节 hash）
+            value_hash = calculate_hash(content_text) if content_text else calculate_file_hash(str(path))
+
+            existing = self.dedup.get_record(dedup_key)
+            is_update = False
+            if existing:
+                if existing.get("hash") == value_hash:
+                    print(f"⏭️  跳过（内容未变化）: {path.name}")
+                    return "skipped"
+                # 同一文档身份但内容变化 → 更新：不覆盖旧 collection，改名另存
+                is_update = True
+
+            # ===== 决定上传文件名（localFile 接口以文件名作为集合名）=====
+            base_name = collection_name or path.stem
+            if is_update:
+                base_name = f"{base_name}-{value_hash[:8]}"
+                logger.warning(
+                    "检测到内容更新，已另存为新集合: %s（原: %s, key=%s）",
+                    base_name, collection_name or path.stem, dedup_key,
+                )
+            upload_filename = f"{base_name}{path.suffix}"
+
+            # 中文文件名需 encode：multipart 的 Content-Disposition 在部分服务端会按
+            # latin-1 解析导致乱码；这里做 RFC3986 百分号编码，FastGPT 端会 decode 还原。
+            safe_filename = quote(upload_filename)
+
+            # 使用官方 create/localFile 接口（自动建集合 + 触发训练/embedding）
+            url = f"{self.base_url}/core/dataset/collection/create/localFile"
+
             with open(file_path, 'rb') as f:
-                files = {'file': (path.name, f)}
-                
-                # 严格按照官方参数格式
+                files = {'file': (safe_filename, f)}
+
+                # 严格按照官方参数格式（parentId 默认 None，与官方 curl 一致）
                 data_payload = {
                     "datasetId": self.dataset_id,
-                    "parentId": collection_id,
+                    "parentId": parent_id,
                     "trainingType": "chunk",
                     "chunkSize": 512,
                     "chunkSplitter": "",
                     "qaPrompt": "",
                     "metadata": metadata
                 }
-                
+
                 form_data = {
                     "data": json.dumps(data_payload)
                 }
-                
-                # 临时移除 Content-Type 让 requests 自动设置
+
+                # 临时移除 Content-Type 让 requests 自动设置 multipart 边界
                 headers = self.session.headers.copy()
                 headers.pop('Content-Type', None)
-                
+
                 response = requests.post(
                     url, 
                     headers=headers,
@@ -177,12 +205,11 @@ class FastGPTSyncer:
                     print(f"✅ 文件上传成功: {path.name}")
                     # ===== 记录上传状态（用于下次去重）=====
                     self.dedup.update_record(
-                        file_identity, 
-                        file_hash,
+                        dedup_key,
+                        value_hash,
                         metadata={
                             "filename": path.name,
-                            "collection_name": collection_name or path.stem,
-                            "collection_id": collection_id,
+                            "collection_name": upload_filename,
                             "qa_metadata": metadata,
                         }
                     )
@@ -198,6 +225,47 @@ class FastGPTSyncer:
             print(f"❌ 文件上传时出错: {e}")
             return "failed"
     
+    def create_dataset(
+        self,
+        name: str,
+        intro: str = "介绍",
+        avatar: str = "",
+        parent_id: Optional[str] = None,
+        vector_model: str = "text-embedding-v4",
+        agent_model: str = "step-1v-8k",
+        vlm_model: Optional[str] = None,
+    ) -> Optional[dict]:
+        """创建 FastGPT 知识库。"""
+        try:
+            vlm_model = vlm_model or os.getenv("FASTGPT_VLM_MODEL", "step-1o-turbo-vision")
+            url = f"{self.base_url}/core/dataset/create"
+            payload = {
+                "parentId": parent_id,
+                "type": "dataset",
+                "name": name,
+                "intro": intro,
+                "avatar": avatar,
+                "vectorModel": vector_model,
+                "agentModel": agent_model,
+                "vlmModel": vlm_model,
+            }
+            response = self.session.post(url, json=payload, timeout=30)
+            if response.status_code != 200:
+                print(f"❌ 创建知识库失败: {response.status_code} - {response.text}")
+                return None
+            data = response.json()
+            if data.get("code") != 200:
+                print(f"❌ 创建知识库失败: {data.get('message', '')}")
+                return None
+            print(f"✅ 创建知识库成功: {name}")
+            result = data.get("data", {})
+            if isinstance(result, str):
+                return {"_id": result}
+            return result
+        except Exception as e:
+            print(f"❌ 创建知识库时出错: {e}")
+            return None
+
     def _get_or_create_collection(self, name: str) -> Optional[str]:
         """获取或创建集合
         

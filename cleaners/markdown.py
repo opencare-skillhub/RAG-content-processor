@@ -1,4 +1,9 @@
-"""Markdown 文件清理器"""
+"""[已停用 / DEPRECATED] Markdown 文件清理器
+
+⚠️ 本模块已停用，待删除：已被 `cleaners/format_cleaner.py` 取代，且存在已知的
+标题规范化 bug（"##标题" 会变成 "# #标题"）。已从 `cleaners/__init__.py` 移除导出。
+保留源码仅供复核，确认无碍后可整文件删除。
+"""
 import re
 from .base import BaseCleaner
 

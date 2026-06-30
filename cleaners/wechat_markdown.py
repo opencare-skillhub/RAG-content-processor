@@ -1,4 +1,8 @@
-"""微信公众号文章 Markdown 清理器（两阶段）
+"""[已停用 / DEPRECATED] 微信公众号文章 Markdown 清理器（两阶段）
+
+⚠️ 本模块已停用，待删除：全仓库无任何调用，且功能已被
+`cleaners/format_cleaner.py` + `cleaners/frontmatter_doctor.py` 覆盖。
+已从 `cleaners/__init__.py` 移除导出。保留源码仅供复核，确认无碍后可整文件删除。
 
 参考技能：
 - baoyu-format-markdown: 初步格式化（清理 CSS、修复标题层级、移除格式噪音）

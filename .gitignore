@@ -1,7 +1,7 @@
 # Environment files
 .env
 .config.yaml
-.bak
+*.bak
 
 # Python cache
 __pycache__/

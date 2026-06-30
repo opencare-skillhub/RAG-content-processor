@@ -4,6 +4,29 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
+from .hash import calculate_hash, calculate_file_hash
+
+
+def compute_dedup_key(metadata: Optional[dict], content: Optional[str],
+                      file_path) -> str:
+    """计算去重标识（文档身份）。
+
+    优先级（见 spec content-pipeline-refactor §5）：
+    1. original_url —— 跨路径稳定的文档身份，内容变化仍可识别为"同一篇"，
+       从而触发"更新即改名"逻辑。
+    2. 清洗后正文内容 hash —— 无 URL 时退化为按内容去重。
+    3. 文件字节 hash —— 兜底。
+
+    返回带前缀的 key，避免不同来源的取值空间冲突。
+    """
+    metadata = metadata or {}
+    url = metadata.get('original_url') or metadata.get('url')
+    if url and str(url).strip():
+        return f"url:{str(url).strip()}"
+    if content:
+        return f"content:{calculate_hash(content)}"
+    return f"file:{calculate_file_hash(str(file_path))}"
+
 
 class DedupManager:
     """去重管理器，基于内容 Hash 进行去重"""

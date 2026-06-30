@@ -10,8 +10,9 @@
 - **upload-file**: 上传单个 Markdown 文件到知识库
 - **upload-folder**: 批量上传整个文件夹的 Markdown 文件
 - **download-wechat**: 批量下载微信公众号文章（通过 MCP 服务）
-- **clean-wechat**: 两阶段清理微信公众号文章
+- **clean-wechat**: 两阶段清理文章（复用统一清洗管线，支持 `--extensions` 与默认 LLM 富化）
 - **download-and-clean**: 一站式处理（下载 → 清理 → 上传）
+- **process-local**: 来源无关的本地文件处理，覆盖 `.md/.txt/.html`（清洗 → LLM 富化 → 可选上传）
 
 ## 安装与运行
 
@@ -132,6 +133,25 @@ python3 main.py download-and-clean \
 # .env 中加：ENRICHER_MODEL=glm-4.5-air + ENRICHER_BASE_URL + ENRICHER_API_KEY
 ```
 
+### 处理本地文件（process-local）
+
+来源无关的本地处理，覆盖 `.md/.txt/.html`：自动按类型清洗（Markdown 走格式清理、
+HTML 走正文提取、TXT 走噪音清理），默认用 LLM 富化 frontmatter，可选上传到知识库。
+
+```bash
+# 清洗 + 富化，输出到 ./cleaned（不上传）
+python3 main.py process-local --input ./some-dir --output ./cleaned
+
+# 只清洗，不富化
+python3 main.py process-local --input ./some-dir --no-enrich
+
+# 清洗 + 富化 + 上传到知识库
+python3 main.py process-local --input ./some-dir --dataset-id 697b19a113081cf58b45cac3
+
+# dry-run：只列出将处理的文件与类型路由
+python3 main.py process-local --input ./some-dir --dry-run
+```
+
 ### 人工精选文章 QA 入库（一期流程）
 
 一期核心流程：**人工精选文章 → 自动整理 QA → 生成文章标签 → 打 QA 分数 → 分级入库**。
@@ -165,24 +185,34 @@ python3 main.py qa-ingest --input ./cleaned-articles --dry-run
 
 ```
 fastgpt-content-processor/
-├── main.py                      # 主程序入口
-├── fastgpt_sync.py              # FastGPT API 封装
+├── main.py                      # 主程序入口（CLI + 交互式菜单）
+├── fastgpt_sync.py              # FastGPT API 封装（上传/查询/搜索，含去重）
 ├── fetchers/                    # 内容抓取模块
-│   ├── wechat_mcp.py           # 微信文章下载（MCP 服务）
-│   └── file.py                 # 本地文件读取
+│   ├── wechat_mcp.py           # 微信文章下载（远程 MCP 服务）
+│   └── file.py                 # 本地文件读取 + 类型判定
 ├── cleaners/                    # 内容清理模块
-│   ├── format_cleaner.py       # 阶段 1：格式清理
+│   ├── pipeline.py             # ContentCleaningPipeline：统一清洗管线（按类型路由 + frontmatter）
+│   ├── format_cleaner.py       # 阶段 1：Markdown 格式清理
 │   ├── frontmatter_doctor.py   # 阶段 2：Frontmatter 标准化
-│   ├── wechat_markdown.py      # 微信文章清理（整合两阶段）
-│   └── markdown.py             # Markdown 通用清理
+│   ├── wechat_article.py       # HTML 正文提取（bs4）
+│   └── text.py                 # 纯文本噪音清理
+├── agents/                      # QA 评分 / Frontmatter 富化
+│   ├── qa_agent.py             # 知识库 QA 整理 Agent
+│   ├── qa_ingest.py            # 精选文章 QA 入库流程
+│   ├── frontmatter_enricher.py # LLM 富化 summary/description/tags
+│   └── llm_client.py           # 共享 LLM 客户端层
 ├── utils/                       # 工具函数
 │   ├── hash.py                 # Hash 计算
-│   └── dedup.py                # 去重逻辑
+│   └── dedup.py                # 去重逻辑 + compute_dedup_key
 ├── tests/                       # 测试目录
 ├── .env.example                 # 环境变量模板
 ├── requirements.txt             # Python 依赖
 └── README.md                    # 本文档
 ```
+
+> 说明：`processor.py`、`examples.py`、`fetchers/wechat_article.py` 已停用并重命名为
+> `*.bak`（旧并行管线 / 失效的实时抓取）；`cleaners/markdown.py`、`cleaners/wechat_markdown.py`
+> 已注释禁用（被 `format_cleaner.py` 取代 / 无引用），待复核后删除。
 
 ## 测试
 
@@ -263,6 +293,17 @@ python3 -m pytest tests/test_core_logic.py
 - [baoyu-format-markdown](https://github.com/baoyu-tech/markdown-formatter)
 - [markdown-frontmatter-doctor](https://github.com/example/frontmatter-doctor)
 - [FastGPT API 文档](https://doc.fastgpt.in/docs/development/api/)
+
+## 更新记录
+
+### v0.2.0 — 内容处理管线整合（content-pipeline-refactor）
+- 停用旧并行管线 `processor.py`（及 `examples.py`、失效的 `fetchers/wechat_article.py`，均改为 `.bak`）
+- 新增统一清洗内核 `ContentCleaningPipeline`，按 `.md/.txt/.html` 类型自动路由清洗
+- 新增命令 `process-local`：来源无关的本地文件清洗 → LLM 富化（默认开）→ 可选去重上传
+- 去重改用 `original_url`/内容 hash 作为文档身份；内容更新时不覆盖、改名另存并打 warning
+- 收紧 `FormatCleaner` 的 `{...}` 规则：跳过代码围栏，保留中文/JSON/LaTeX，仅删疑似 CSS
+- `clean-wechat` / `download-and-clean` 重构为复用统一管线；`clean-wechat` 支持 `--extensions`/`--no-enrich`
+- 测试覆盖增至 104 项
 
 ## 许可证
 
